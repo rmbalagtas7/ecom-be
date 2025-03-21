@@ -45,8 +45,21 @@ const schema = new Schema(
     avatar: {
       type: String,
       default: ''
-    }
-
+    },
+    passwordResetToken: {
+      type: String,
+      default: ''
+    },
+    passwordResetExpires: {
+      type: Date,
+    },
+    cart: [
+      {
+        productId: { type: mongoose.Schema.Types.ObjectId, ref: "Products" },
+        quantity: { type: Number, required: true, default: 0 }
+      }
+    ]
+    
   },
   {
     timestamps: true,

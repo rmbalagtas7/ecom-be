@@ -1,6 +1,7 @@
 const User = require("../models/users");
 const jwt = require("jsonwebtoken");
 const sgMail = require("@sendgrid/mail");
+const { v4: uuidv4 } = require("uuid");
 require("dotenv").config();
 const crpyto = require("crypto");
 
@@ -30,7 +31,7 @@ const sendVerificationEmail = async (firstName, email, token) => {
     templateId: process.env.SENDGRID_TEMPLATE_ID_FOR_VERIFICATION,
     dynamicTemplateData: {
       firstName: firstName,
-      token: token,
+      resetLink: token,
     },
   };
   await sgMail.send(msg);
@@ -67,7 +68,7 @@ exports.register = async (req, res) => {
       ...req.body,
       username: req.body.email.split("@")[0],
       otp: otp,
-      otpExpires: Date.now() + 3 * 60 * 1000, // OTP valid for 10 minutes
+      otpExpires: Date.now() + 3 * 60 * 1000,
     });
 
     await newUser.save();
@@ -167,5 +168,122 @@ exports.verifyOtp = async (req, res) => {
   } catch (error) {
     console.error("Verification Error:", error);
     res.status(500).json({ success: false, error: "Internal Server Error" });
+  }
+};
+
+exports.resendOtp = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    const user = await User.findOne({ email });
+
+    if(!user){
+      return res.status(404).json({ success: false, message: "Cannot find a user with that account"});
+    }
+
+    const otp = generateOTP();
+    user.otp = otp;
+    user.otpExpires = Date.now() + 3 * 60 * 1000;
+    
+    await user.save();
+
+    await sendOTP(user.firstName, email, otp);
+
+    res.send({ success: true, message: "Your OTP is already sent to your Email"});
+
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Internal Server Error"});
+  }
+}
+
+exports.requestPasswordReset = async (req, res) => {
+  try {
+
+    const { email } = req.body;
+
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res
+        .status(404)
+        .json({
+          success: false,
+          message: "Cannot find a user with that account",
+        });
+    }
+
+    const token = uuidv4();
+
+    const resetToken = "http://localhost:5173/auth/reset-password?token=" + token;
+    user.passwordResetToken = token;
+    user.passwordResetExpires = Date.now() + 3 * 60 * 1000;
+
+    await user.save();
+    await sendVerificationEmail(user.firstName, email, resetToken);
+
+    res.send({ success: true, message: "Your password request is send to your email" });
+
+
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Internal Server Error"});
+  }
+}
+
+
+exports.resetPassword = async (req, res) => {
+  try {
+    const { email, passwordResetToken, newPassword } = req.body;
+
+    // Find user by email
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "Cannot find a user with that account",
+      });
+    }
+
+
+    if (!user.passwordResetToken || user.passwordResetToken !== passwordResetToken) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired reset token",
+      });
+    }
+
+    if (user.passwordResetExpires && user.passwordResetExpires < Date.now()) {
+      return res.status(400).json({
+        success: false,
+        message: "Password reset token has expired",
+      });
+    }
+
+    const isSamePassword = await user.comparePassword(newPassword);
+
+    if (!isSamePassword) {
+      return res.status(400).json({
+        success: false,
+        message: "You cannot reuse your previous password. Please choose a new one.",
+      });
+    }
+
+    await User.findOneAndUpdate(
+      { email },
+      {
+        password: newPassword, 
+        passwordResetToken: null, 
+        passwordResetExpires: null,
+      }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Password has been successfully reset. You can now log in.",
+    });
+
+  } catch (error) {
+    console.error("Error resetting password:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
